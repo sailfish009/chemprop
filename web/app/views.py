@@ -307,7 +307,6 @@ def predict():
     elif request.form['drawSmiles'] != '':
         smiles = [request.form['drawSmiles']]
     else:
-        print(" GOT HERE")
         # Upload data file with SMILES
         data = request.files['data']
         data_name = secure_filename(data.filename)
@@ -342,6 +341,19 @@ def predict():
             args.no_cuda = True
         else:
             args.gpu = int(gpu)
+
+    if hasattr(args, "features_path"):
+        del args.features_path
+
+    train_args = load_args(model_paths[0])
+
+    for key, value in vars(train_args).items():
+        if not hasattr(args, key):
+            setattr(args, key, value)
+
+    if args.features_path != None:
+        args.features_generator = ["rdkit_2d_normalized"]
+        args.features_path = None
 
     modify_predict_args(args)
 
@@ -483,28 +495,51 @@ def upload_checkpoint(return_page: str):
     ckpt = request.files['checkpoint']
 
     ckpt_name = request.form['checkpointName']
+    ckpt_ext = os.path.splitext(ckpt.filename)[1]
 
-    # Create temporary file to get ckpt_args without losing data.
-    with NamedTemporaryFile() as temp_file:
-        ckpt.save(temp_file.name)
+    # Collect paths to all uploaded checkpoints (and unzip if necessary)
+    temp_dir = TemporaryDirectory()
+    ckpt_paths = []
 
-        ckpt_args = load_args(temp_file)
+    if ckpt_ext.endswith('.pt'):
+        ckpt_path = os.path.join(temp_dir.name, 'model.pt')
+        ckpt.save(ckpt_path)
+        ckpt_paths = [ckpt_path]
 
+    elif ckpt_ext.endswith('.zip'):
+        ckpt_dir = os.path.join(temp_dir.name, 'models')
+        zip_path = os.path.join(temp_dir.name, 'models.zip')
+        ckpt.save(zip_path)
+
+        with zipfile.ZipFile(zip_path, mode='r') as z:
+            z.extractall(ckpt_dir)
+
+        for root, _, fnames in os.walk(ckpt_dir):
+            ckpt_paths += [os.path.join(root, fname) for fname in fnames if fname.endswith('.pt')]
+
+    else:
+        errors.append(f'Uploaded checkpoint(s) file must be either .pt or .zip but got {ckpt_ext}')
+
+    # Insert checkpoints into database
+    if len(ckpt_paths) > 0:
+        ckpt_args = load_args(ckpt_paths[0])
         ckpt_id, new_ckpt_name = db.insert_ckpt(ckpt_name,
                                                 current_user,
                                                 ckpt_args.dataset_type,
                                                 ckpt_args.epochs,
-                                                1,
+                                                len(ckpt_paths),
                                                 ckpt_args.train_data_size)
 
-        model_id = db.insert_model(ckpt_id)
+        for ckpt_path in ckpt_paths:
+            model_id = db.insert_model(ckpt_id)
+            model_path = os.path.join(app.config['CHECKPOINT_FOLDER'], f'{model_id}.pt')
 
-        model_path = os.path.join(app.config['CHECKPOINT_FOLDER'], f'{model_id}.pt')
+            if ckpt_name != new_ckpt_name:
+                warnings.append(name_already_exists_message('Checkpoint', ckpt_name, new_ckpt_name))
 
-        if ckpt_name != new_ckpt_name:
-            warnings.append(name_already_exists_message('Checkpoint', ckpt_name, new_ckpt_name))
+            shutil.copy(ckpt_path, model_path)
 
-        shutil.copy(temp_file.name, model_path)
+    temp_dir.cleanup()
 
     warnings, errors = json.dumps(warnings), json.dumps(errors)
 

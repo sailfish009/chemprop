@@ -1,5 +1,5 @@
-# Property Prediction
-This repository contains message passing neural networks for molecular property prediction.
+# Molecular Property Prediction
+This repository contains message passing neural networks for molecular property prediction as described in the paper [Analyzing Learned Molecular Representations for Property Prediction](https://pubs.acs.org/doi/abs/10.1021/acs.jcim.9b00237).
 
 ## Table of Contents
 
@@ -20,6 +20,7 @@ This repository contains message passing neural networks for molecular property 
     * [RDKit 2D Features](#rdkit-2d-features)
     * [Custom Features](#custom-features)
 - [Predicting](#predicting)
+- [Interpreting Model Prediction](#Interpreting)
 - [TensorBoard](#tensorboard)
 - [Results](#results)
 
@@ -43,6 +44,8 @@ The easiest way to install the `chemprop` dependencies is via conda. Here are th
 
 The optional `descriptastorus` package is only necessary if you plan to incorporate computed RDKit features into your model (see [Additional Features](#additional-features)). The addition of these features improves model performance on some datasets but is not necessary for the base model.
 
+Note that on machines with GPUs, you may need to manually install a GPU-enabled version of PyTorch by following the instructions [here](https://pytorch.org/get-started/locally/).
+
 ### Option 2: Docker
 
 Docker provides a nice way to isolate the `chemprop` code and environment. To install and run our code in a Docker container, follow these steps:
@@ -59,13 +62,15 @@ Note that you will need to run the latter command with nvidia-docker if you are 
 If you would like to use functions or classes from `chemprop` in your own code, you can install `chemprop` as a pip package as follows:
 
 1. `cd /path/to/chemprop`
-2. `pip install .`
+2. `pip install -e .`
 
 Then you can use `import chemprop` or `from chemprop import ...` in your other code.
 
 ### Notes
 
-If you get warning messages about `kyotocabinet` not being installed, it's safe to ignore them.
+**PyTorch GPU:** Although PyTorch is installed automatically along with `chemprop`, you may need to install the GPU version manually. Instructions are available [here](https://pytorch.org/get-started/locally/).
+
+**kyotocabinet**: If you get warning messages about `kyotocabinet` not being installed, it's safe to ignore them.
    
 ## Web Interface
 
@@ -146,6 +151,8 @@ where `<n>` is the number of hyperparameter settings to try and `<config_path>` 
 python train.py --data_path <data_path> --dataset_type <type> --config_path <config_path>
 ```
 
+Note that the hyperparameter optimization script sees all the data given to it. The intended use is to run the hyperparameter optimization script on a dataset with the eventual test set held out. If you need to optimize hyperparameters separately for several different cross validation splits, you should e.g. set up a bash script to run hyperparameter_optimization.py separately on each split's training and validation data with test held out. 
+
 ### Additional Features
 
 While the model works very well on its own, especially after hyperparameter optimization, we have seen that adding computed molecule-level features can further improve performance on certain datasets. Features can be added to the model using the `--features_generator <generator>` flag.
@@ -156,7 +163,7 @@ As a starting point, we recommend using pre-normalized RDKit features by using t
 
 Note: In order to use the `rdkit_2d_normalized` features, you must have `descriptastorus` installed. If you installed via conda, you can install `descriptastorus` by running `pip install git+https://github.com/bp-kelley/descriptastorus`. If you installed via Docker, `descriptastorus` should already be installed.
 
-The full list of available features for `--feagrtures_generator` is as follows. 
+The full list of available features for `--features_generator` is as follows. 
 
 `morgan` is binary Morgan fingerprints, radius 2 and 2048 bits.
 `morgan_count` is count-based Morgan, radius 2 and 2048 bits.
@@ -188,6 +195,30 @@ or
 python predict.py --test_path data/tox21.csv --checkpoint_path tox21_checkpoints/fold_0/model_0/model.pt --preds_path tox21_preds.csv
 ```
 
+## Interpreting
+
+It is often helpful to provide explanation of model prediction (i.e., this molecule is toxic because of this substructure). Given a trained model, you can interpret the model prediction using the following command
+```
+python interpret.py --data_path data/tox21.csv --checkpoint_dir tox21_checkpoints/fold_0/ --property_id 1
+```
+The output will be like the following:
+* The first column is a molecule and second column is its predicted property (in this case NR-AR toxicity). 
+* The third column is the smallest substructure that made this molecule classified as toxic (which we call rationale). 
+* The fourth column is the predicted toxicity of that substructure. 
+
+As shown in the first row, when a molecule is predicted to be non-toxic, we will not provide any rationale for its prediction. 
+
+smiles | NR-AR | rationale | rationale_score
+| :---: | :---: | :---: | :---: |
+O=[N+]([O-])c1cc(C(F)(F)F)cc([N+](=O)[O-])c1Cl | 0.014 | | | 
+CC1(C)O[C@@H]2C[C@H]3[C@@H]4C[C@H](F)C5=CC(=O)C=C[C@]5(C)[C@H]4[C@@H](O)C[C@]3(C)[C@]2(C(=O)CO)O1 | 0.896 | C[C@]12C=CC(=O)C=C1[CH2:1]C[CH2:1][CH2:1]2 | 0.769 |
+C[C@]12CC[C@H]3[C@@H](CC[C@@]45O[C@@H]4C(O)=C(C#N)C[C@]35C)[C@@H]1CC[C@@H]2O | 0.941 | C[C@]12C[CH:1]=[CH:1][C@H]3O[C@]31CC[C@@H]1[C@@H]2CC[C:1][CH2:1]1 | 0.808 |
+C[C@]12C[C@H](O)[C@H]3[C@@H](CCC4=CC(=O)CC[C@@]43C)[C@@H]1CC[C@]2(O)C(=O)COP(=O)([O-])[O-] | 0.957 | C1C[CH2:1][C:1][C@@H]2[C@@H]1[C@@H]1CC[C:1][C:1]1C[CH2:1]2 | 0.532 | 
+
+Our interpretation script explains model prediction one property at a time. `--property_id 1` tells the script to provide explanation for the first property in the dataset (which is NR-AR). In a multi-task training setting, you will need to change `--property_id` to provide explanation for each property in the dataset.
+
+For computational efficiency, we currently restricted the rationale to have maximum 20 atoms and minimum 8 atoms. You can adjust these constraints through `--max_atoms` and `--min_atoms` argument.
+
 ## TensorBoard
 
 During training, TensorBoard logs are automatically saved to the same directory as the model checkpoints. To view TensorBoard logs, run `tensorboard --logdir=<dir>` where `<dir>` is the path to the checkpoint directory. Then navigate to [http://localhost:6006](http://localhost:6006).
@@ -196,26 +227,29 @@ During training, TensorBoard logs are automatically saved to the same directory 
 
 We compared our model against MolNet by Wu et al. on all of the MolNet datasets for which we could reproduce their splits (all but Bace, Toxcast, and qm7). When there was only one fold provided (scaffold split for BBBP and HIV), we ran our model multiple times and reported average performance. In each case we optimize hyperparameters on separate folds, use rdkit_2d_normalized features when useful, and compare to the best-performing model in MolNet as reported by Wu et al. We did not ensemble our model in these results.
 
-Results on classification datasets (AUC score, the higher the better)
+Results on regression datasets (lower is better)
 
-| Dataset | Size |	Ours |	MolNet Best Model |
-| :---: | :---: | :---: | :---: |
-| BBBP | 2,039 | 0.735 ± 0.0064	| 0.729 |
-| Tox21 | 7,831 | 0.855 ± 0.0052	| 0.829 ± 0.006 |
-| Sider | 1,427 |	0.678 ± 0.019	| 0.648 ± 0.009 |
-| clintox | 1,478 | 0.9 ± 0.0089	| 0.832 ± 0.037 |
-| MUV | 93,087 | 0.0897 ± 0.015 | 0.184 ± 0.02 |
-| HIV | 41,127 |	0.793 ± 0.0012 |	0.792 |
-| PCBA | 437,928 | 0.397 ± .00075 | 	0.136 ± 0.004 | 
+Dataset | Size | Metric | Ours | MolNet Best Model |
+| :---: | :---: | :---: | :---: | :---: |
+QM8 | 21,786 | MAE | 0.011 ± 0.000 | 0.0143 ± 0.0011 |
+QM9 | 133,885 | MAE | 2.666 ± 0.006 | 2.4 ± 1.1 |
+ESOL | 1,128 | RMSE | 0.555 ± 0.047 | 0.58 ± 0.03 |
+FreeSolv | 642 | RMSE | 1.075 ± 0.054 | 1.15 ± 0.12 |
+Lipophilicity | 4,200 | RMSE | 0.555 ± 0.023 | 0.655 ± 0.036 |
+PDBbind (full) | 9,880 | RMSE | 1.391 ± 0.012 | 1.25 ± 0 | 
+PDBbind (core) | 168 | RMSE | 2.173 ± 0.090 | 1.92 ± 0.07 | 
+PDBbind (refined) | 3,040 | RMSE | 1.486 ± 0.026 | 1.38 ± 0 | 
 
-Results on regression datasets (score, the lower the better)
+Results on classification datasets (higher is better)
 
-Dataset | Size | Ours | GraphConv/MPNN (deepchem) |
-| :---: | :---: | :---: | :---: |
-delaney	| 1,128 | 0.567 ± 0.026 | 0.58 ± 0.03 |
-Freesolv | 642 |	1.11 ± 0.035 | 1.15 ± 0.12 |
-Lipo | 4,200 |	0.542 ± 0.02 |	0.655 ± 0.036 |
-qm8 | 21,786 |	0.0082 ± 0.00019 | 0.0143 ± 0.0011 |
-qm9 | 133,884 |	2.03 ± 0.021	| 2.4 ± 1.1 |
+| Dataset | Size | Metric | Ours | MolNet Best Model |
+| :---: | :---: | :---: | :---: | :---: |
+| PCBA | 437,928 | PRC-AUC | 0.335 ± 0.001 |  0.136 ± 0.004 |
+| MUV | 93,087 | PRC-AUC | 0.041 ± 0.007 | 0.184 ± 0.02 |
+| HIV | 41,127 | ROC-AUC | 0.776 ± 0.007 | 0.792 ± 0 |
+| BBBP | 2,039 | ROC-AUC | 0.737 ± 0.001 | 0.729 ± 0 |
+| Tox21 | 7,831 | ROC-AUC | 0.851 ± 0.002 | 0.829 ± 0.006 |
+| SIDER | 1,427 | ROC-AUC | 0.676 ± 0.014 | 0.648 ± 0.009 |
+| ClinTox | 1,478 | ROC-AUC | 0.864 ± 0.017 | 0.832 ± 0.037 |
 
 Lastly, you can find the code to our original repo at https://github.com/wengong-jin/chemprop and for the Mayr et al. baseline at https://github.com/yangkevin2/lsc_experiments . 
